@@ -6,6 +6,8 @@ version := "1.11.1"
 
 scalaVersion := "2.9.1"
 
+parallelExecution in Test := false
+
 resolvers ++= Seq("twitter.com" at "http://maven.twttr.com")
 
 libraryDependencies ++= Seq(

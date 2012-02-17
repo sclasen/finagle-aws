@@ -1,16 +1,28 @@
 package com.heroku.finagle.aws
 
-import com.twitter.finagle.builder.ClientBuilder
 import org.jboss.netty.handler.codec.http.HttpResponseStatus._
 import org.jboss.netty.handler.codec.http.HttpHeaders.Names._
 import Client._
 import org.jboss.netty.buffer.ChannelBuffers
 import org.scalatest.WordSpec
 import org.scalatest.matchers.MustMatchers
+import com.heroku.finagle.aws.S3.{S3Secret, S3Key}
+import com.twitter.logging.Logger
+import com.twitter.logging.config.{LoggerConfig, ConsoleHandlerConfig}
+
 
 class S3Spec extends WordSpec with MustMatchers {
 
   "An S3Client" should {
+
+    "delete items" in {
+      DeleteBucket.deleteAllItemsInBucket(s3, bucket).get() must be(true)
+    }
+
+    "delete a bucket" in {
+      s3(DeleteBucket(bucket)).get().getStatus must be(NO_CONTENT)
+    }
+
     "create a bucket " in {
       s3(CreateBucket(bucket)).get().getStatus must be(OK)
     }
@@ -36,9 +48,20 @@ class S3Spec extends WordSpec with MustMatchers {
 
     "list a bucket" in {
       val keys: List[String] = ListBucket.getKeys(s3, bucket)
-      keys.length must be > 1
+      keys.length must be(1)
       keys.contains(path.substring(1)) must be(true)
     }
+
+    /* "list big buckets" in {
+      val bStart = System.currentTimeMillis()
+      val bKeys = ListBucket.getKeys(s3, "heroku-jvm-proxy-central")
+      println("Blocking:" + bKeys.length + " in " + (System.currentTimeMillis() - bStart))
+      bKeys.length must be > 2000
+      val nbStart = System.currentTimeMillis()
+      val nbKeys = ListBucket.getKeysNonBlocking(s3, "heroku-jvm-proxy-central")
+      nbKeys.get().length must be > 2000
+      println("NBBlocking:" + nbKeys.get().length + " in " + (System.currentTimeMillis() - nbStart))
+    }*/
 
     "delete ok" in {
       s3(Delete(bucket, path)).get().getStatus must be(NO_CONTENT)
@@ -51,16 +74,26 @@ object Client {
 
   import util.Properties._
 
+  val logConf = new LoggerConfig {
+    node = ""
+    level = Logger.levelNames.get(configOr("LOG_LEVEL", "INFO"))
+    handlers = List(new ConsoleHandlerConfig)
+  }
+
+  logConf.apply()
+
   val payload = "finagle testing 1 2 3"
   val path = "/some/test/key"
   val bucket = "test-finagle-bucket"
-  lazy val s3 = ClientBuilder().hosts("s3.amazonaws.com:80")
-    .hostConnectionLimit(1).name("testClient")
-    .codec(S3.get(config("S3_KEY"), config("S3_SECRET")))
-    .build()
+  lazy val s3 = S3.client(S3Key(config("S3_KEY")), S3Secret(config("S3_SECRET")))
 
   def config(key: String): String = {
     envOrNone(key).getOrElse(propOrNone(key).get)
   }
+
+  def configOr(key: String, default: String): String = {
+    envOrNone(key).getOrElse(propOrNone(key).getOrElse(default))
+  }
+
 
 }
