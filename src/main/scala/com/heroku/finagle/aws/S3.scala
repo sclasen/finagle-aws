@@ -140,7 +140,6 @@ class RequestEncoder(key: String, secret: String) extends SimpleChannelDownstrea
 
 }
 
-//TODO verify response codes on all responses that are dealt with interally
 
 trait S3Request extends HttpRequestProxy {
 
@@ -259,6 +258,7 @@ object ListBucket {
   }
 
   private def parseKeys(hResp: HttpResponse): (List[String], Boolean) = {
+    if (hResp.getStatus != OK) throw new IllegalStateException("Status was not OK: " + hResp.getStatus.toString)
     var resp: String = hResp.getContent.toString(UTF_8)
     var xResp = XML.loadString(resp)
     val keys = ((xResp \\ "Contents" \\ "Key") map (_.text)).toList
