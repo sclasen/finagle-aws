@@ -10,6 +10,8 @@ parallelExecution in Test := false
 
 resolvers ++= Seq("twitter.com" at "http://maven.twttr.com")
 
+publishTo := Some(Resolver.file("file",  new File(Path.userHome.absolutePath+"/.m2/repository")))
+
 libraryDependencies ++= Seq(
 	"com.twitter" % "finagle-core_2.9.1" % "1.11.1" withSources(),
 	"com.twitter" % "finagle-http_2.9.1" % "1.11.1" withSources(),
