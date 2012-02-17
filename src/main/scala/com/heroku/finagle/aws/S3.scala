@@ -14,8 +14,15 @@ import javax.crypto.spec.SecretKeySpec
 import javax.crypto.Mac
 import org.jboss.netty.buffer.ChannelBuffer
 import com.twitter.logging.Logger
+import xml.XML
+import org.jboss.netty.util.CharsetUtil._
+import collection.mutable.HashMap
+import com.twitter.util.Future
+import annotation.tailrec
 
 object S3 {
+  type S3Client = Service[S3Request, HttpResponse]
+
   def get(key: String, secret: String) = new S3(key, secret)
 }
 
@@ -54,6 +61,9 @@ class RequestEncoder(key: String, secret: String) extends SimpleChannelDownstrea
   def prepare(req: S3Request) {
     req.setHeaders(HOST -> bucketHost(req.bucket), DATE -> amzDate)
     req.setHeaders(AUTHORIZATION -> authorization(key, secret, req, req.bucket))
+    //Add query params after signing
+    if (req.queries.size > 0)
+      req.setUri(req.getUri + "?" + req.queries.map(qp => (qp._1 + "=" + qp._2)).reduceLeft(_ + "&" + _))
   }
 
   /*DateTime format required by AWS*/
@@ -101,7 +111,7 @@ class RequestEncoder(key: String, secret: String) extends SimpleChannelDownstrea
   }
 
   private def calculateHMAC(key: String, data: String): String = {
-    val signingKey = new SecretKeySpec(key.getBytes("UTF-8"), ALGORITHM)
+    val signingKey = new SecretKeySpec(key.getBytes(UTF_8), ALGORITHM)
     val mac = Mac.getInstance(ALGORITHM)
     mac.init(signingKey)
     val rawHmac = mac.doFinal(data.getBytes())
@@ -115,8 +125,11 @@ trait S3Request extends HttpRequestProxy {
 
   def bucket: String
 
-  def setHeaders(headers: (String, String)*) {
+  val queries = new HashMap[String, String]
+
+  def setHeaders(headers: (String, String)*) = {
     headers.foreach(h => httpRequest.setHeader(h._1, h._2))
+    this
   }
 
   def header(name: String): Option[String] = {
@@ -124,20 +137,25 @@ trait S3Request extends HttpRequestProxy {
   }
 
   def normalizeKey(key: String) = {
-    if (key.startsWith("/")) key.substring(1)
-    else key
+    if (key.startsWith("/")) key
+    else "/" + key
+  }
+
+  def query(q: (String, String)*) = {
+    q.foreach(kv => queries += kv._1 -> kv._2)
+    this
   }
 }
 
 case class Put(bucket: String, key: String, content: ChannelBuffer, headers: (String, String)*) extends S3Request {
-  override val httpRequest: HttpRequest = new DefaultHttpRequest(HTTP_1_1, PUT, "/" + normalizeKey(key));
+  override val httpRequest: HttpRequest = new DefaultHttpRequest(HTTP_1_1, PUT, normalizeKey(key));
   httpRequest.setContent(content)
   httpRequest.setHeader(CONTENT_LENGTH, content.readableBytes().toString)
   headers.foreach(h => httpRequest.setHeader(h._1, h._2))
 }
 
 case class Get(bucket: String, key: String) extends S3Request {
-  override val httpRequest: HttpRequest = new DefaultHttpRequest(HTTP_1_1, GET, "/" + normalizeKey(key));
+  override val httpRequest: HttpRequest = new DefaultHttpRequest(HTTP_1_1, GET, normalizeKey(key));
 }
 
 case class CreateBucket(bucket: String) extends S3Request {
@@ -146,10 +164,67 @@ case class CreateBucket(bucket: String) extends S3Request {
 }
 
 case class Delete(bucket: String, key: String) extends S3Request {
-  override val httpRequest: HttpRequest = new DefaultHttpRequest(HTTP_1_1, DELETE, "/" + normalizeKey(key));
+  override val httpRequest: HttpRequest = new DefaultHttpRequest(HTTP_1_1, DELETE, normalizeKey(key));
   httpRequest.setHeader(CONTENT_LENGTH, "0")
 }
 
+case class ListBucket(bucket: String, marker: Option[String] = None) extends S3Request {
+  override val httpRequest: HttpRequest = new DefaultHttpRequest(HTTP_1_1, GET, "/");
+  marker.foreach(m => query("marker" -> m))
+}
+
+object ListBucket {
+
+  import com.heroku.finagle.aws.S3.S3Client;
+
+  val log = Logger.get(classOf[ListBucket])
+
+  def getKeys(s3: S3Client, bucket: String): List[String] = {
+    getKeysB(s3, bucket)
+  }
+
+  @tailrec
+  def getKeysB(s3: S3Client, bucket: String, marker: Option[String] = None, all: List[String] = List()): List[String] = {
+    var hResp: HttpResponse = s3(ListBucket(bucket, marker)).get()
+    var resp: String = hResp.getContent.toString(UTF_8)
+    var xResp = XML.loadString(resp)
+    val keys = ((xResp \\ "Contents" \\ "Key") map (_.text)).toList
+    val truncated = ((xResp \ "IsTruncated") map (_.text.toBoolean))
+    //if this is a deep recursion these take up a lot of space so we null out
+    hResp = null
+    resp = null
+    xResp = null
+    log.debug("Got %s keys for %s", keys.size.toString, bucket)
+    if (truncated.headOption.getOrElse(false)) {
+      getKeysB(s3, bucket, Some(keys.last), keys ++ all)
+    } else {
+      keys ++ all
+    }
+  }
+
+
+  def getKeysNB(s3: S3Client, bucket: String, marker: Option[String] = None, all: List[String] = List()): Future[List[String]] = {
+    s3(ListBucket(bucket, marker)).flatMap {
+      hResp =>
+        var resp: String = hResp.getContent.toString(UTF_8)
+        var xResp = XML.loadString(resp)
+        val keys = ((xResp \\ "Contents" \\ "Key") map (_.text)).toList
+        val truncated = ((xResp \ "IsTruncated") map (_.text.toBoolean))
+        //if this is a deep recursion these take up a lot of space so we null out
+        resp = null
+        xResp = null
+        log.debug("Got %s keys for %s", keys.size.toString, bucket)
+        if (truncated.headOption.getOrElse(false)) {
+          getKeysNB(s3, bucket, Some(keys.last), keys ++ all)
+        } else {
+          Future.value(keys ++ all)
+        }
+    }
+
+  }
+
+
+}
 
 class S3Response(resp: HttpResponse) extends HttpResponseProxy {
   def httpResponse = resp

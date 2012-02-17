@@ -1,52 +1,66 @@
 package com.heroku.finagle.aws
 
-import org.specs2.mutable._
 import com.twitter.finagle.builder.ClientBuilder
 import org.jboss.netty.handler.codec.http.HttpResponseStatus._
 import org.jboss.netty.handler.codec.http.HttpHeaders.Names._
-import util.Properties
 import Client._
 import org.jboss.netty.buffer.ChannelBuffers
+import org.scalatest.WordSpec
+import org.scalatest.matchers.MustMatchers
 
-class S3Spec extends Specification {
+class S3Spec extends WordSpec with MustMatchers {
 
   "An S3Client" should {
     "create a bucket " in {
-      client(CreateBucket(bucket)).get().getStatus mustEqual OK
+      s3(CreateBucket(bucket)).get().getStatus must be(OK)
     }
 
     "put ok" in {
-      client(Put(bucket, path, ChannelBuffers.wrappedBuffer(payload.getBytes), CONTENT_TYPE -> "text/html")).get().getStatus mustEqual OK
+      s3(Put(bucket, path, ChannelBuffers.wrappedBuffer(payload.getBytes), CONTENT_TYPE -> "text/html")).get().getStatus must be(OK)
     }
 
     "fail to put into a bad bucket" in {
-      client(Put(bucket + "failme", path, ChannelBuffers.wrappedBuffer(payload.getBytes), CONTENT_TYPE -> "text/html")).get().getStatus mustEqual NOT_FOUND
+      s3(Put(bucket + "failme", path, ChannelBuffers.wrappedBuffer(payload.getBytes))).get().getStatus must be(NOT_FOUND)
     }
 
     "get ok" in {
-      val getResp = client(Get(bucket, path)).get()
-      getResp.getStatus mustEqual OK
-      getResp.getHeader(CONTENT_TYPE) mustEqual "text/html"
-      new String(getResp.getContent.array()) mustEqual payload
+      val getResp = s3(Get(bucket, path)).get()
+      getResp.getStatus must be(OK)
+      getResp.getHeader(CONTENT_TYPE) must be("text/html")
+      new String(getResp.getContent.array()) must be(payload)
     }
 
     "fail to get a non existent path " in {
-      client(Get(bucket + "failme", path)).get().getStatus mustEqual NOT_FOUND
+      s3(Get(bucket + "failme", path)).get().getStatus must be(NOT_FOUND)
+    }
+
+    "list a bucket" in {
+      val keys: List[String] = ListBucket.getKeys(s3, bucket)
+      keys.length must be > 1
+      keys.contains(path.substring(1)) must be(true)
     }
 
     "delete ok" in {
-      client(Delete(bucket, path)).get().getStatus mustEqual NO_CONTENT
+      s3(Delete(bucket, path)).get().getStatus must be(NO_CONTENT)
     }
 
   }
 }
 
 object Client {
+
+  import util.Properties._
+
   val payload = "finagle testing 1 2 3"
   val path = "/some/test/key"
   val bucket = "test-finagle-bucket"
-  lazy val client = ClientBuilder().hosts("s3.amazonaws.com:80")
-                    .hostConnectionLimit(1).name("testClient")
-                    .codec(S3.get(Properties.envOrNone("S3_KEY").get, Properties.envOrNone("S3_SECRET").get))
-                    .build()
+  lazy val s3 = ClientBuilder().hosts("s3.amazonaws.com:80")
+    .hostConnectionLimit(1).name("testClient")
+    .codec(S3.get(config("S3_KEY"), config("S3_SECRET")))
+    .build()
+
+  def config(key: String): String = {
+    envOrNone(key).getOrElse(propOrNone(key).get)
+  }
+
 }

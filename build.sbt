@@ -12,7 +12,7 @@ libraryDependencies ++= Seq(
 	"com.twitter" % "finagle-core_2.9.1" % "1.11.1" withSources(),
 	"com.twitter" % "finagle-http_2.9.1" % "1.11.1" withSources(),
     "joda-time" % "joda-time" % "1.6.2" withSources(),
-     "org.specs2" %% "specs2" % "1.8" % "test"
+    "org.scalatest" %% "scalatest" % "1.7.1" % "test"
 )
 
 
