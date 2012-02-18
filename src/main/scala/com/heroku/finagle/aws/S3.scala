@@ -204,6 +204,9 @@ object Delete {
 
 object DeleteBucket {
 
+  val log = Logger.get(classOf[DeleteBucket])
+
+
   import com.heroku.finagle.aws.S3.S3Client;
 
   def deleteAllItemsInBucket(s3: S3Client, bucket: String): Future[Boolean] = {
@@ -213,7 +216,9 @@ object DeleteBucket {
           key => {
             s3(Delete(bucket, key)).map {
               resp =>
-                resp.getStatus.equals(Delete.success)
+                val success: Boolean = resp.getStatus.equals(Delete.success)
+                if (!success) log.warning("failed to delete %s in %s, status %s", key, bucket, resp.getStatus)
+                success
             }
           }
         }).map {
