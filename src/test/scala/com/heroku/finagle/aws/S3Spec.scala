@@ -42,6 +42,12 @@ class S3Spec extends WordSpec with MustMatchers {
       new String(getResp.getContent.array()) must be(payload)
     }
 
+    "head ok" in {
+      val getResp = s3(Head(bucket, path)).get()
+      getResp.getStatus must be(OK)
+      getResp.getHeader(CONTENT_TYPE) must be("text/html")
+    }
+
     "fail to get a non existent path " in {
       s3(Get(bucket + "failme", path)).get().getStatus must be(NOT_FOUND)
     }

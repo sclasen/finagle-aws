@@ -90,11 +90,15 @@ class RequestEncoder(key: String, secret: String) extends SimpleChannelDownstrea
   lazy val amzFormat = DateTimeFormat.forPattern("EEE, dd MMM yyyy HH:mm:ss z").withLocale(java.util.Locale.US).withZone(DateTimeZone.forOffsetHours(0))
 
   /*headers used by this app that need to be used in signing*/
+  //TODO make this extensible
+  val SOURCE_ETAG = "x-amz-meta-source-etag"
+  val SOURCE_MOD = "x-amz-meta-source-mod"
+  val COPY_SOURCE = "x-amz-copy-source"
   val ACL = "x-amz-acl"
   val STORAGE_CLASS = "x-amz-storage-class"
   val VERSION = "x-amz-version-id"
   //headers need to be in alphabetical order in this list
-  val AMZN_HEADERS = List(ACL, STORAGE_CLASS, VERSION)
+  val AMZN_HEADERS = List(ACL, COPY_SOURCE, SOURCE_ETAG, SOURCE_MOD, STORAGE_CLASS, VERSION)
 
   val RRS = "REDUCED_REDUNDANCY"
   val ALGORITHM = "HmacSHA1"
@@ -145,6 +149,8 @@ trait S3Request extends HttpRequestProxy {
 
   def bucket: String
 
+  def sign: Boolean = true
+
   val queries = new HashMap[String, String]
 
   def setHeaders(headers: (String, String)*) = {
@@ -174,8 +180,12 @@ case class Put(bucket: String, key: String, content: ChannelBuffer, headers: (St
   headers.foreach(h => setHeader(h._1, h._2))
 }
 
-case class Get(bucket: String, key: String) extends S3Request {
+case class Get(bucket: String, key: String, override val sign: Boolean = true) extends S3Request {
   override val httpRequest: HttpRequest = new DefaultHttpRequest(HTTP_1_1, GET, normalizeKey(key));
+}
+
+case class Head(bucket: String, key: String, override val sign: Boolean = true) extends S3Request {
+  override val httpRequest: HttpRequest = new DefaultHttpRequest(HTTP_1_1, HEAD, normalizeKey(key));
 }
 
 case class CreateBucket(bucket: String) extends S3Request {
