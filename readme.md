@@ -2,6 +2,7 @@
 
 A module for making life a little easier when talking to AWS via Finagle.
 
+
    import com.heroku.finagle.aws.S3.{S3Secret, S3Key}
    import com.heroku.finagle.aws.{Get, Put, S3}
    import com.twitter.util.Future

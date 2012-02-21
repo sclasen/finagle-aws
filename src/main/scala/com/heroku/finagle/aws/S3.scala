@@ -53,7 +53,7 @@ case class S3(private val key: String, private val secret: String, httpFactory: 
       def pipelineFactory = new ChannelPipelineFactory {
         def getPipeline = {
           val pipeline = httpFactory.client(null).pipelineFactory.getPipeline
-          pipeline.addLast("requestEncodeer", new RequestEncoder(key, secret))
+          pipeline.addLast("requestEncoder", new RequestEncoder(key, secret))
           pipeline
         }
       }
