@@ -2,7 +2,7 @@ name := "finagle-aws"
 
 organization := "com.heroku"
 
-version := "1.11.1"
+version := "1.11.2-SNAPSHOT"
 
 scalaVersion := "2.9.1"
 
