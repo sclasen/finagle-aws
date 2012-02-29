@@ -15,6 +15,12 @@ class S3Spec extends WordSpec with MustMatchers {
 
   "An S3Client" should {
 
+    "list buckets" in {
+      val buckets: List[String] = ListAllBuckets(s3).get()
+      buckets.length must be > 0
+    }
+
+
     "delete items" in {
       DeleteBucket.deleteAllItemsInBucket(s3, bucket).get() must be(true)
     }

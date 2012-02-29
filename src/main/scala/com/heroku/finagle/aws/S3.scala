@@ -1,7 +1,6 @@
 package com.heroku.finagle.aws
 
-import com.twitter.finagle.http.Http
-import com.twitter.finagle.http.netty.{HttpResponseProxy, HttpRequestProxy}
+import com.twitter.finagle.http.netty.HttpRequestProxy
 import org.jboss.netty.channel._
 import org.joda.time.format.DateTimeFormat
 import org.jboss.netty.handler.codec.http.HttpHeaders.Names._
@@ -9,6 +8,7 @@ import org.jboss.netty.handler.codec.http.HttpVersion._
 import org.jboss.netty.handler.codec.http.HttpResponseStatus._
 import com.twitter.finagle._
 import builder.ClientBuilder
+import http.{Response, RichHttp, Http}
 import org.jboss.netty.handler.codec.http.HttpMethod._
 import org.jboss.netty.handler.codec.http._
 import org.joda.time.{DateTime, DateTimeZone}
@@ -24,7 +24,7 @@ import com.twitter.util.{StorageUnit, Future}
 import com.twitter.conversions.storage._
 
 object S3 {
-  type S3Client = Service[S3Request, HttpResponse]
+  type S3Client = Service[S3Request, Response]
 
   @implicitNotFound(msg = "cannot find implicit S3Key in scope")
   case class S3Key(key: String)
@@ -46,14 +46,14 @@ object S3 {
   }
 }
 
-case class S3(private val key: String, private val secret: String, httpFactory: CodecFactory[HttpRequest, HttpResponse] = Http.get()) extends CodecFactory[S3Request, HttpResponse] {
+case class S3(private val key: String, private val secret: String, httpFactory: CodecFactory[HttpRequest, HttpResponse] = Http.get()) extends CodecFactory[S3Request, Response] {
 
   def client = Function.const {
-    new Codec[S3Request, HttpResponse] {
+    new Codec[S3Request, Response] {
       def pipelineFactory = new ChannelPipelineFactory {
         def getPipeline = {
-          val pipeline = httpFactory.client(null).pipelineFactory.getPipeline
-          pipeline.addLast("requestEncoder", new RequestEncoder(key, secret))
+          val pipeline = RichHttp(httpFactory).client(null).pipelineFactory.getPipeline
+          pipeline.addLast("awsEncoder", new RequestEncoder(key, secret))
           pipeline
         }
       }
@@ -70,20 +70,28 @@ class RequestEncoder(key: String, secret: String) extends SimpleChannelDownstrea
 
   override def writeRequested(ctx: ChannelHandlerContext, e: MessageEvent) {
     e.getMessage match {
-      case s3Request: S3Request =>
-        prepare(s3Request)
+      case bucketRequest: BucketRequest =>
+        prepare(bucketRequest)
+        ctx.sendDownstream(e)
+      case serviceRequest: ServiceRequest =>
+        prepare(serviceRequest)
         ctx.sendDownstream(e)
       case unknown =>
         ctx.sendDownstream(e)
     }
   }
 
-  def prepare(req: S3Request) {
+  def prepare(req: BucketRequest) {
     req.setHeaders(HOST -> bucketHost(req.bucket), DATE -> amzDate)
-    req.setHeaders(AUTHORIZATION -> authorization(key, secret, req, req.bucket))
+    req.setHeaders(AUTHORIZATION -> authorization(key, secret, req))
     //Add query params after signing
     if (req.queries.size > 0)
       req.setUri(req.getUri + "?" + req.queries.map(qp => (qp._1 + "=" + qp._2)).reduceLeft(_ + "&" + _))
+  }
+
+  def prepare(req: ServiceRequest) {
+    req.setHeaders(HOST -> "s3.amazonaws.com", DATE -> amzDate)
+    req.setHeaders(AUTHORIZATION -> authorization(key, secret, req))
   }
 
   /*DateTime format required by AWS*/
@@ -106,19 +114,34 @@ class RequestEncoder(key: String, secret: String) extends SimpleChannelDownstrea
 
   def amzDate: String = amzFormat.print(new DateTime)
 
+
   /*request signing for amazon*/
   /*Create the Authorization payload and sign it with the AWS secret*/
-  def sign(secret: String, request: S3Request, bucket: String): String = {
+  def sign(secret: String, request: BucketRequest): String = {
     val data = List(
       request.getMethod().getName,
       request.header(CONTENT_MD5).getOrElse(""),
       request.header(CONTENT_TYPE).getOrElse(""),
       request.getHeader(DATE)
-    ).foldLeft("")(_ + _ + "\n") + normalizeAmzHeaders(request) + "/" + bucket + request.getUri
+    ).foldLeft("")(_ + _ + "\n") + normalizeAmzHeaders(request) + "/" + request.bucket + request.getUri
     log.debug("String to sign")
     log.debug(data)
     calculateHMAC(secret, data)
   }
+
+
+  def sign(secret: String, request: ServiceRequest): String = {
+    val data = List(
+      request.getMethod().getName,
+      request.header(CONTENT_MD5).getOrElse(""),
+      request.header(CONTENT_TYPE).getOrElse(""),
+      request.getHeader(DATE)
+    ).foldLeft("")(_ + _ + "\n") + normalizeAmzHeaders(request) + request.getUri
+    log.debug("String to sign")
+    log.debug(data)
+    calculateHMAC(secret, data)
+  }
+
 
   def normalizeAmzHeaders(request: S3Request): String = {
     AMZN_HEADERS.foldLeft("") {
@@ -130,9 +153,14 @@ class RequestEncoder(key: String, secret: String) extends SimpleChannelDownstrea
 
   def bucketHost(bucket: String) = bucket + ".s3.amazonaws.com"
 
-  def authorization(s3key: String, s3Secret: String, req: S3Request, bucket: String): String = {
-    "AWS " + s3key + ":" + sign(s3Secret, req, bucket)
+  def authorization(s3key: String, s3Secret: String, req: BucketRequest): String = {
+    "AWS " + s3key + ":" + sign(s3Secret, req)
   }
+
+  def authorization(s3key: String, s3Secret: String, req: ServiceRequest): String = {
+    "AWS " + s3key + ":" + sign(s3Secret, req)
+  }
+
 
   private def calculateHMAC(key: String, data: String): String = {
     val signingKey = new SecretKeySpec(key.getBytes(UTF_8), ALGORITHM)
@@ -145,13 +173,30 @@ class RequestEncoder(key: String, secret: String) extends SimpleChannelDownstrea
 }
 
 
+case class ServiceRequest(url: String) extends S3Request {
+  override val httpRequest: HttpRequest = new DefaultHttpRequest(HTTP_1_1, GET, url);
+}
+
+object ListAllBuckets {
+
+  val log = Logger.get("ListAllBuckets")
+
+  def apply(s3: S3.S3Client): Future[List[String]] = {
+    s3(ServiceRequest("/")).map {
+      hResp =>
+        if (hResp.getStatus.getCode != 200) {
+          val response = new String(hResp.getContent.array(), UTF_8)
+          log.error(response)
+          throw new RuntimeException("Cant List Buckets")
+        }
+        var resp: String = hResp.getContent.toString(UTF_8)
+        var xResp = XML.loadString(resp)
+        ((xResp \\ "Buckets" \\ "Bucket" \\ "Name") map (_.text)).toList
+    }
+  }
+}
+
 trait S3Request extends HttpRequestProxy {
-
-  def bucket: String
-
-  def sign: Boolean = true
-
-  val queries = new HashMap[String, String]
 
   def setHeaders(headers: (String, String)*) = {
     headers.foreach(h => httpRequest.setHeader(h._1, h._2))
@@ -161,6 +206,16 @@ trait S3Request extends HttpRequestProxy {
   def header(name: String): Option[String] = {
     Option(httpRequest.getHeader(name))
   }
+
+}
+
+trait BucketRequest extends S3Request {
+
+  def bucket: String
+
+  def sign: Boolean = true
+
+  val queries = new HashMap[String, String]
 
   def normalizeKey(key: String) = {
     if (key.startsWith("/")) key
@@ -173,36 +228,40 @@ trait S3Request extends HttpRequestProxy {
   }
 }
 
-case class Put(bucket: String, key: String, content: ChannelBuffer, headers: (String, String)*) extends S3Request {
+trait ObjectRequest extends BucketRequest {
+  def key: String
+}
+
+case class Put(bucket: String, key: String, content: ChannelBuffer, headers: (String, String)*) extends ObjectRequest {
   override val httpRequest: HttpRequest = new DefaultHttpRequest(HTTP_1_1, PUT, normalizeKey(key));
   setContent(content)
   setHeader(CONTENT_LENGTH, content.readableBytes().toString)
   headers.foreach(h => setHeader(h._1, h._2))
 }
 
-case class Get(bucket: String, key: String, override val sign: Boolean = true) extends S3Request {
+case class Get(bucket: String, key: String, override val sign: Boolean = true) extends ObjectRequest {
   override val httpRequest: HttpRequest = new DefaultHttpRequest(HTTP_1_1, GET, normalizeKey(key));
 }
 
-case class Head(bucket: String, key: String, override val sign: Boolean = true) extends S3Request {
+case class Head(bucket: String, key: String, override val sign: Boolean = true) extends ObjectRequest {
   override val httpRequest: HttpRequest = new DefaultHttpRequest(HTTP_1_1, HEAD, normalizeKey(key));
 }
 
-case class CreateBucket(bucket: String) extends S3Request {
+case class CreateBucket(bucket: String) extends BucketRequest {
   override val httpRequest: HttpRequest = new DefaultHttpRequest(HTTP_1_1, PUT, "/");
   setHeader(CONTENT_LENGTH, "0")
 }
 
-case class DeleteBucket(bucket: String) extends S3Request {
+case class DeleteBucket(bucket: String) extends BucketRequest {
   override val httpRequest: HttpRequest = new DefaultHttpRequest(HTTP_1_1, DELETE, "/");
 }
 
-case class Delete(bucket: String, key: String) extends S3Request {
+case class Delete(bucket: String, key: String) extends ObjectRequest {
   override val httpRequest: HttpRequest = new DefaultHttpRequest(HTTP_1_1, DELETE, normalizeKey(key));
   setHeader(CONTENT_LENGTH, "0")
 }
 
-case class ListBucket(bucket: String, marker: Option[String] = None) extends S3Request {
+case class ListBucket(bucket: String, marker: Option[String] = None) extends BucketRequest {
   override val httpRequest: HttpRequest = new DefaultHttpRequest(HTTP_1_1, GET, "/");
   marker.foreach(m => query("marker" -> m))
 }
@@ -272,7 +331,7 @@ object ListBucket {
 
   }
 
-  private def parseKeys(hResp: HttpResponse): (List[String], Boolean) = {
+  private def parseKeys(hResp: Response): (List[String], Boolean) = {
     if (hResp.getStatus != OK) throw new IllegalStateException("Status was not OK: " + hResp.getStatus.toString)
     var resp: String = hResp.getContent.toString(UTF_8)
     var xResp = XML.loadString(resp)
@@ -283,9 +342,7 @@ object ListBucket {
 
 }
 
-class S3Response(resp: HttpResponse) extends HttpResponseProxy {
-  def httpResponse = resp
-}
+
 
 
 
