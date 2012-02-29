@@ -1,6 +1,7 @@
 package com.heroku.finagle.aws
 
-import com.twitter.finagle.http.netty.HttpRequestProxy
+import com.twitter.finagle.http.Http
+import com.twitter.finagle.http.netty.{HttpResponseProxy, HttpRequestProxy}
 import org.jboss.netty.channel._
 import org.joda.time.format.DateTimeFormat
 import org.jboss.netty.handler.codec.http.HttpHeaders.Names._
@@ -8,7 +9,6 @@ import org.jboss.netty.handler.codec.http.HttpVersion._
 import org.jboss.netty.handler.codec.http.HttpResponseStatus._
 import com.twitter.finagle._
 import builder.ClientBuilder
-import http.{Response, RichHttp, Http}
 import org.jboss.netty.handler.codec.http.HttpMethod._
 import org.jboss.netty.handler.codec.http._
 import org.joda.time.{DateTime, DateTimeZone}
@@ -24,7 +24,7 @@ import com.twitter.util.{StorageUnit, Future}
 import com.twitter.conversions.storage._
 
 object S3 {
-  type S3Client = Service[S3Request, Response]
+  type S3Client = Service[S3Request, HttpResponse]
 
   @implicitNotFound(msg = "cannot find implicit S3Key in scope")
   case class S3Key(key: String)
@@ -46,14 +46,14 @@ object S3 {
   }
 }
 
-case class S3(private val key: String, private val secret: String, httpFactory: CodecFactory[HttpRequest, HttpResponse] = Http.get()) extends CodecFactory[S3Request, Response] {
+case class S3(private val key: String, private val secret: String, httpFactory: CodecFactory[HttpRequest, HttpResponse] = Http.get()) extends CodecFactory[S3Request, HttpResponse] {
 
   def client = Function.const {
-    new Codec[S3Request, Response] {
+    new Codec[S3Request, HttpResponse] {
       def pipelineFactory = new ChannelPipelineFactory {
         def getPipeline = {
-          val pipeline = RichHttp(httpFactory).client(null).pipelineFactory.getPipeline
-          pipeline.addLast("awsEncoder", new RequestEncoder(key, secret))
+          val pipeline = httpFactory.client(null).pipelineFactory.getPipeline
+          pipeline.addLast("requestEncoder", new RequestEncoder(key, secret))
           pipeline
         }
       }
@@ -331,7 +331,7 @@ object ListBucket {
 
   }
 
-  private def parseKeys(hResp: Response): (List[String], Boolean) = {
+  private def parseKeys(hResp: HttpResponse): (List[String], Boolean) = {
     if (hResp.getStatus != OK) throw new IllegalStateException("Status was not OK: " + hResp.getStatus.toString)
     var resp: String = hResp.getContent.toString(UTF_8)
     var xResp = XML.loadString(resp)
@@ -342,7 +342,9 @@ object ListBucket {
 
 }
 
-
+class S3Response(resp: HttpResponse) extends HttpResponseProxy {
+  def httpResponse = resp
+}
 
 
 
