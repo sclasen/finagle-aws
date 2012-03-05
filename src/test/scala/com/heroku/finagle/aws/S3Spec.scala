@@ -64,6 +64,16 @@ class S3Spec extends WordSpec with MustMatchers {
       keys.contains(path.substring(1)) must be(true)
     }
 
+    "list all with and without a prefix" in {
+      val list: List[String] = ListBucket.listAll(s3, bucket)(_.key).get
+      list.length must be(1)
+      list.contains(path.substring(1)) must be(true)
+      val noList: List[String] = ListBucket.listAll(s3, bucket, Some(Prefix(prefixNotInPath)))(_.key).get
+      noList.length must be(0)
+      
+
+    }
+
     /* "list big buckets" in {
       val bStart = System.currentTimeMillis()
       val bKeys = ListBucket.getKeys(s3, "heroku-jvm-proxy-central")
@@ -96,6 +106,7 @@ object Client {
 
   val payload = "finagle testing 1 2 3"
   val path = "/some/test/key"
+  val prefixNotInPath = "/not/some/test/key"
   val bucket = "test-finagle-bucket"
   lazy val s3 = S3.client(S3Key(config("S3_KEY")), S3Secret(config("S3_SECRET")))
 

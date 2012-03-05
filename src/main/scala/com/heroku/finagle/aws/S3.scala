@@ -16,12 +16,12 @@ import javax.crypto.spec.SecretKeySpec
 import javax.crypto.Mac
 import org.jboss.netty.buffer.ChannelBuffer
 import com.twitter.logging.Logger
-import xml.XML
 import org.jboss.netty.util.CharsetUtil._
 import collection.mutable.HashMap
 import annotation.{implicitNotFound, tailrec}
 import com.twitter.util.{StorageUnit, Future}
 import com.twitter.conversions.storage._
+import xml.XML
 
 object S3 {
   type S3Client = Service[S3Request, HttpResponse]
@@ -261,11 +261,17 @@ case class Delete(bucket: String, key: String) extends ObjectRequest {
   setHeader(CONTENT_LENGTH, "0")
 }
 
-case class ListBucket(bucket: String, marker: Option[String] = None) extends BucketRequest {
+case class ListBucket(bucket: String, marker: Option[Marker] = None, prefix: Option[Prefix] = None) extends BucketRequest {
   override val httpRequest: HttpRequest = new DefaultHttpRequest(HTTP_1_1, GET, "/");
-  marker.foreach(m => query("marker" -> m))
+  marker.foreach(m => query("marker" -> m.marker))
+  prefix.foreach(p => query("prefix" -> p.prefix))
 }
 
+case class Marker(marker: String)
+
+case class Prefix(prefix: String)
+
+case class ObjectInfo(key: String, lastModified: String, etag: String, size: String, storageClass: String, ownerId: String, ownerDisplayName: String)
 
 object Delete {
   val success = NO_CONTENT
@@ -306,38 +312,70 @@ object ListBucket {
 
 
   @tailrec
-  def getKeys(s3: S3Client, bucket: String, marker: Option[String] = None, all: List[String] = List()): List[String] = {
+  def getKeys(s3: S3Client, bucket: String, marker: Option[Marker] = None, all: List[String] = List()): List[String] = {
     val (keys, truncated) = parseKeys(s3(ListBucket(bucket, marker)).get())
     log.debug("B Got %s keys for %s", keys.size.toString, bucket)
     if (truncated) {
-      getKeys(s3, bucket, Some(keys.last), keys ++ all)
+      getKeys(s3, bucket, Some(Marker(keys.last)), keys ++ all)
     } else {
       keys ++ all
     }
   }
 
 
-  def getKeysNonBlocking(s3: S3Client, bucket: String, marker: Option[String] = None, all: List[String] = List()): Future[List[String]] = {
+  def getKeysNonBlocking(s3: S3Client, bucket: String, marker: Option[Marker] = None, all: List[String] = List()): Future[List[String]] = {
     s3(ListBucket(bucket, marker)).flatMap {
       hResp =>
         val (keys, truncated) = parseKeys(hResp)
         log.debug("NB Got %s keys for %s", keys.size.toString, bucket)
         if (truncated) {
-          getKeysNonBlocking(s3, bucket, Some(keys.last), keys ++ all)
+          getKeysNonBlocking(s3, bucket, Some(Marker(keys.last)), keys ++ all)
         } else {
           Future.value(keys ++ all)
         }
     }
-
   }
 
   private def parseKeys(hResp: HttpResponse): (List[String], Boolean) = {
     if (hResp.getStatus != OK) throw new IllegalStateException("Status was not OK: " + hResp.getStatus.toString)
-    var resp: String = hResp.getContent.toString(UTF_8)
-    var xResp = XML.loadString(resp)
+    val resp: String = hResp.getContent.toString(UTF_8)
+    val xResp = XML.loadString(resp)
     val keys = ((xResp \\ "Contents" \\ "Key") map (_.text)).toList
     val truncated = ((xResp \ "IsTruncated") map (_.text.toBoolean))
     (keys, truncated.headOption.getOrElse(false))
+  }
+
+  private def parseListing[T](hResp: HttpResponse, xform: ObjectInfo => T): (List[T], Boolean, Option[Marker]) = {
+    if (hResp.getStatus != OK) throw new IllegalStateException("Status was not OK: " + hResp.getStatus.toString)
+    val resp: String = hResp.getContent.toString(UTF_8)
+    val xResp = XML.loadString(resp)
+    val keys = ((xResp \\ "Contents")).map {
+      content =>
+        ObjectInfo(
+          (content \ "Key").text,
+          (content \ "LastModified").text,
+          (content \ "ETag").text,
+          (content \ "Size").text,
+          (content \ "StorageClass").text,
+          (content \ "Owner" \ "ID").text,
+          (content \ "Owner" \ "DisplayName").text
+        )
+    }.toList
+    val truncated = ((xResp \ "IsTruncated") map (_.text.toBoolean))
+    (keys.map(xform), truncated.headOption.getOrElse(false), keys.lastOption.map(o=>Marker(o.key)))
+  }
+
+  def listAll[T](s3: S3Client, bucket: String, prefix: Option[Prefix] = None, marker: Option[Marker] = None, all: List[T] = List())(xform: ObjectInfo => T): Future[List[T]] = {
+    s3(ListBucket(bucket, marker, prefix)).flatMap {
+      hResp =>
+        val (keys, truncated, marker) = parseListing(hResp, xform)
+        log.debug("NB Got %s Objects for %s", keys.size.toString, bucket)
+        if (truncated) {
+          listAll(s3, bucket, prefix, marker, keys ++ all)(xform)
+        } else {
+          Future.value(keys ++ all)
+        }
+    }
   }
 
 }
