@@ -269,7 +269,12 @@ case class ListBucket(bucket: String, marker: Option[Marker] = None, prefix: Opt
 
 case class Marker(marker: String)
 
-case class Prefix(prefix: String)
+case class Prefix(prefix: String) {
+  def path(local: String): String = {
+    if (local.startsWith("/")) prefix + local
+    else prefix + "/" + local
+  }
+}
 
 case class ObjectInfo(key: String, lastModified: String, etag: String, size: String, storageClass: String, ownerId: String, ownerDisplayName: String)
 
@@ -284,8 +289,8 @@ object DeleteBucket {
 
   import com.heroku.finagle.aws.S3.S3Client;
 
-  def deleteAllItemsInBucket(s3: S3Client, bucket: String): Future[Boolean] = {
-    ListBucket.getKeysNonBlocking(s3, bucket).flatMap {
+  def deleteAllItemsInBucket(s3: S3Client, bucket: String, prefix: Option[Prefix] = None): Future[Boolean] = {
+    ListBucket.getKeysNonBlocking(s3, bucket, prefix).flatMap {
       keys =>
         Future.collect(keys.map {
           key => {
@@ -311,25 +316,28 @@ object ListBucket {
   val log = Logger.get(classOf[ListBucket])
 
 
+  def getKeys(s3: S3Client, bucket: String, prefix: Option[Prefix] = None): List[String] = getKeys(s3, bucket, prefix, None, List())
+
   @tailrec
-  def getKeys(s3: S3Client, bucket: String, marker: Option[Marker] = None, all: List[String] = List()): List[String] = {
-    val (keys, truncated) = parseKeys(s3(ListBucket(bucket, marker)).get())
+  private def getKeys(s3: S3Client, bucket: String, prefix: Option[Prefix], marker: Option[Marker], all: List[String]): List[String] = {
+    val (keys, truncated) = parseKeys(s3(ListBucket(bucket, marker, prefix)).get())
     log.debug("B Got %s keys for %s", keys.size.toString, bucket)
     if (truncated) {
-      getKeys(s3, bucket, Some(Marker(keys.last)), keys ++ all)
+      getKeys(s3, bucket, prefix, Some(Marker(keys.last)), keys ++ all)
     } else {
       keys ++ all
     }
   }
 
+  def getKeysNonBlocking(s3: S3Client, bucket: String, prefix: Option[Prefix] = None): Future[List[String]] = getKeysNonBlocking(s3, bucket, prefix, List(), None)
 
-  def getKeysNonBlocking(s3: S3Client, bucket: String, marker: Option[Marker] = None, all: List[String] = List()): Future[List[String]] = {
-    s3(ListBucket(bucket, marker)).flatMap {
+  private def getKeysNonBlocking(s3: S3Client, bucket: String, prefix: Option[Prefix], all: List[String], marker: Option[Marker]): Future[List[String]] = {
+    s3(ListBucket(bucket, marker, prefix)).flatMap {
       hResp =>
         val (keys, truncated) = parseKeys(hResp)
         log.debug("NB Got %s keys for %s", keys.size.toString, bucket)
         if (truncated) {
-          getKeysNonBlocking(s3, bucket, Some(Marker(keys.last)), keys ++ all)
+          getKeysNonBlocking(s3, bucket, prefix, keys ++ all, Some(Marker(keys.last)))
         } else {
           Future.value(keys ++ all)
         }
@@ -349,7 +357,7 @@ object ListBucket {
     if (hResp.getStatus != OK) throw new IllegalStateException("Status was not OK: " + hResp.getStatus.toString)
     val resp: String = hResp.getContent.toString(UTF_8)
     val xResp = XML.loadString(resp)
-    val keys = ((xResp \\ "Contents")).map {
+    val objects = ((xResp \\ "Contents")).map {
       content =>
         ObjectInfo(
           (content \ "Key").text,
@@ -362,18 +370,20 @@ object ListBucket {
         )
     }.toList
     val truncated = ((xResp \ "IsTruncated") map (_.text.toBoolean))
-    (keys.map(xform), truncated.headOption.getOrElse(false), keys.lastOption.map(o=>Marker(o.key)))
+    (objects.map(xform), truncated.headOption.getOrElse(false), objects.lastOption.map(o => Marker(o.key)))
   }
 
-  def listAll[T](s3: S3Client, bucket: String, prefix: Option[Prefix] = None, marker: Option[Marker] = None, all: List[T] = List())(xform: ObjectInfo => T): Future[List[T]] = {
+  def listAll[T](s3: S3Client, bucket: String, prefix: Option[Prefix] = None)(xform: ObjectInfo => T): Future[List[T]] = listAll(s3, bucket, prefix, None, List())(xform)
+
+  private def listAll[T](s3: S3Client, bucket: String, prefix: Option[Prefix], marker: Option[Marker], all: List[T])(xform: ObjectInfo => T): Future[List[T]] = {
     s3(ListBucket(bucket, marker, prefix)).flatMap {
       hResp =>
-        val (keys, truncated, marker) = parseListing(hResp, xform)
-        log.debug("NB Got %s Objects for %s", keys.size.toString, bucket)
+        val (objects, truncated, nextMarker) = parseListing(hResp, xform)
+        log.debug("NB Got %s Objects for %s", objects.size.toString, bucket)
         if (truncated) {
-          listAll(s3, bucket, prefix, marker, keys ++ all)(xform)
+          listAll(s3, bucket, prefix, nextMarker, objects ++ all)(xform)
         } else {
-          Future.value(keys ++ all)
+          Future.value(objects ++ all)
         }
     }
   }

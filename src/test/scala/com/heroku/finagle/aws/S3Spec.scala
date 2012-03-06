@@ -70,11 +70,9 @@ class S3Spec extends WordSpec with MustMatchers {
       list.contains(path.substring(1)) must be(true)
       val noList: List[String] = ListBucket.listAll(s3, bucket, Some(Prefix(prefixNotInPath)))(_.key).get
       noList.length must be(0)
-      
-
     }
 
-    /* "list big buckets" in {
+    /*"list big buckets" in {
       val bStart = System.currentTimeMillis()
       val bKeys = ListBucket.getKeys(s3, "heroku-jvm-proxy-central")
       println("Blocking:" + bKeys.length + " in " + (System.currentTimeMillis() - bStart))
