@@ -174,7 +174,7 @@ class RequestEncoder(key: String, secret: String) extends SimpleChannelDownstrea
 
 
 case class ServiceRequest(url: String) extends S3Request {
-  override val httpRequest: HttpRequest = new DefaultHttpRequest(HTTP_1_1, GET, url);
+  override val httpRequest: HttpRequest = new DefaultHttpRequest(HTTP_1_1, GET, url)
 }
 
 object ListAllBuckets {
@@ -217,9 +217,9 @@ trait BucketRequest extends S3Request {
 
   val queries = new HashMap[String, String]
 
-  def normalizeKey(key: String) = {
-    if (key.startsWith("/")) key
-    else "/" + key
+  def normalizeObjectName(objectName: String) = {
+    if (objectName.startsWith("/")) objectName
+    else "/" + objectName
   }
 
   def query(q: (String, String)*) = {
@@ -229,40 +229,40 @@ trait BucketRequest extends S3Request {
 }
 
 trait ObjectRequest extends BucketRequest {
-  def key: String
+  def objectName: String
 }
 
-case class Put(bucket: String, key: String, content: ChannelBuffer, headers: (String, String)*) extends ObjectRequest {
-  override val httpRequest: HttpRequest = new DefaultHttpRequest(HTTP_1_1, PUT, normalizeKey(key));
+case class Put(bucket: String, objectName: String, content: ChannelBuffer, headers: (String, String)*) extends ObjectRequest {
+  override val httpRequest: HttpRequest = new DefaultHttpRequest(HTTP_1_1, PUT, normalizeObjectName(objectName))
   setContent(content)
   setHeader(CONTENT_LENGTH, content.readableBytes().toString)
   headers.foreach(h => setHeader(h._1, h._2))
 }
 
-case class Get(bucket: String, key: String, override val sign: Boolean = true) extends ObjectRequest {
-  override val httpRequest: HttpRequest = new DefaultHttpRequest(HTTP_1_1, GET, normalizeKey(key));
+case class Get(bucket: String, objectName: String, override val sign: Boolean = true) extends ObjectRequest {
+  override val httpRequest: HttpRequest = new DefaultHttpRequest(HTTP_1_1, GET, normalizeObjectName(objectName))
 }
 
-case class Head(bucket: String, key: String, override val sign: Boolean = true) extends ObjectRequest {
-  override val httpRequest: HttpRequest = new DefaultHttpRequest(HTTP_1_1, HEAD, normalizeKey(key));
+case class Head(bucket: String, objectName: String, override val sign: Boolean = true) extends ObjectRequest {
+  override val httpRequest: HttpRequest = new DefaultHttpRequest(HTTP_1_1, HEAD, normalizeObjectName(objectName))
 }
 
 case class CreateBucket(bucket: String) extends BucketRequest {
-  override val httpRequest: HttpRequest = new DefaultHttpRequest(HTTP_1_1, PUT, "/");
+  override val httpRequest: HttpRequest = new DefaultHttpRequest(HTTP_1_1, PUT, "/")
   setHeader(CONTENT_LENGTH, "0")
 }
 
 case class DeleteBucket(bucket: String) extends BucketRequest {
-  override val httpRequest: HttpRequest = new DefaultHttpRequest(HTTP_1_1, DELETE, "/");
+  override val httpRequest: HttpRequest = new DefaultHttpRequest(HTTP_1_1, DELETE, "/")
 }
 
-case class Delete(bucket: String, key: String) extends ObjectRequest {
-  override val httpRequest: HttpRequest = new DefaultHttpRequest(HTTP_1_1, DELETE, normalizeKey(key));
+case class Delete(bucket: String, objectName: String) extends ObjectRequest {
+  override val httpRequest: HttpRequest = new DefaultHttpRequest(HTTP_1_1, DELETE, normalizeObjectName(objectName))
   setHeader(CONTENT_LENGTH, "0")
 }
 
 case class ListBucket(bucket: String, marker: Option[Marker] = None, prefix: Option[Prefix] = None) extends BucketRequest {
-  override val httpRequest: HttpRequest = new DefaultHttpRequest(HTTP_1_1, GET, "/");
+  override val httpRequest: HttpRequest = new DefaultHttpRequest(HTTP_1_1, GET, "/")
   marker.foreach(m => query("marker" -> m.marker))
   prefix.foreach(p => query("prefix" -> p.prefix))
 }
@@ -287,7 +287,7 @@ object DeleteBucket {
   val log = Logger.get(classOf[DeleteBucket])
 
 
-  import com.heroku.finagle.aws.S3.S3Client;
+  import com.heroku.finagle.aws.S3.S3Client
 
   def deleteAllItemsInBucket(s3: S3Client, bucket: String, prefix: Option[Prefix] = None): Future[Boolean] = {
     ListBucket.getKeysNonBlocking(s3, bucket, prefix).flatMap {
@@ -311,7 +311,7 @@ object DeleteBucket {
 
 object ListBucket {
 
-  import com.heroku.finagle.aws.S3.S3Client;
+  import com.heroku.finagle.aws.S3.S3Client
 
   val log = Logger.get(classOf[ListBucket])
 
