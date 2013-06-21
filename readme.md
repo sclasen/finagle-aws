@@ -20,9 +20,9 @@ A module for making life a little easier when talking to AWS via Finagle.
 
          val buffer = ChannelBuffers.wrappedBuffer("SOME BYTES".getBytes(CharsetUtil.UTF_8))
 
-         val put: Future[HttpResponse] = client(Put("theBucket", "theKey", buffer))
+         val put: Future[HttpResponse] = client(Put("theBucket", "objectName", buffer))
 
-         val get: Future[HttpResponse] = client(Get("theBucket", "theKey"))
+         val get: Future[HttpResponse] = client(Get("theBucket", "objectName"))
 
 
        }
