@@ -19,8 +19,9 @@ import com.twitter.logging.Logger
 import org.jboss.netty.util.CharsetUtil._
 import collection.mutable.HashMap
 import annotation.{implicitNotFound, tailrec}
-import com.twitter.util.{StorageUnit, Future}
+import com.twitter.util.{StorageUnit, Future, Duration}
 import com.twitter.conversions.storage._
+import java.util.concurrent.TimeUnit
 import xml.XML
 
 object S3 {
@@ -35,13 +36,15 @@ object S3 {
 
   def get(key: String, secret: String) = new S3(key, secret)
 
-  def client(key: S3Key, secret: S3Secret, name: String = "S3Client", maxReq: StorageUnit = 100.megabytes, maxRes: StorageUnit = 100.megabytes): S3Client = {
+  def client(key: S3Key, secret: S3Secret, name: String = "S3Client", maxReq: StorageUnit = 100.megabytes, maxRes: StorageUnit = 100.megabytes,
+    connTimeout: Duration = Duration(1, TimeUnit.SECONDS)): S3Client = {
     ClientBuilder().codec(S3(key.key, secret.secret, Http(_maxRequestSize = maxReq, _maxResponseSize = maxRes)))
       .sendBufferSize(262144)
       .recvBufferSize(262144)
       .hosts("s3.amazonaws.com:80")
       .hostConnectionLimit(Integer.MAX_VALUE)
       .name(name)
+      .tcpConnectTimeout(connTimeout)
       .build()
   }
 }
