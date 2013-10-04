@@ -224,29 +224,6 @@ object ListAllBuckets {
   }
 }
 
-object RequestAndRetry {
-  def apply(request: S3Request, key: S3.S3Key, secret: S3.S3Secret, host: String = "s3.amazonaws.com:80"): Future[HttpResponse] =  {
-    submit(request, key, secret, host = host)
-  }
-
-  def submit(request: S3Request, key: S3.S3Key, secret: S3.S3Secret, host: String, retries: Int = 5, retryTimeout: Int = 5): Future[HttpResponse] =  {
-    val s3 = S3.client(key, secret, host = host)
-    s3(request) flatMap { resp =>
-      if (resp.getStatus() ==  HttpResponseStatus.TEMPORARY_REDIRECT) {
-        val url = new URL(resp.getHeader("Location"))
-        val newHost = "%s:%d".format(url.getHost.split("\\.").tail.mkString("."), url.getPort)
-        submit(request, key, secret, newHost, retries)
-      } else Future.value(resp)
-    } onFailure { resp =>
-      if(retries > 0) {
-        // Wait and retry in a few seconds ...
-        DefaultTimer.twitter.doLater(Duration.fromSeconds(retryTimeout)) {submit(request, key, secret, host, retries - 1)}
-      }
-      Future.exception(resp)
-    }
-  }
-}
-
 trait S3Request extends HttpRequestProxy {
 
   def setHeaders(headers: (String, String)*) = {
