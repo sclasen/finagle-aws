@@ -2,6 +2,7 @@ package com.heroku.finagle.aws
 
 import com.twitter.finagle.http.Http
 import com.twitter.finagle.http.netty.{HttpResponseProxy, HttpRequestProxy}
+import com.twitter.finagle.util.DefaultTimer
 import org.jboss.netty.channel._
 import org.joda.time.format.DateTimeFormat
 import org.jboss.netty.handler.codec.http.HttpHeaders.Names._
@@ -19,12 +20,14 @@ import com.twitter.logging.Logger
 import org.jboss.netty.util.CharsetUtil._
 import collection.mutable.HashMap
 import annotation.{implicitNotFound, tailrec}
-import com.twitter.util.{StorageUnit, Future}
+import com.twitter.util.{StorageUnit, Future, Duration}
 import com.twitter.conversions.storage._
+import java.util.concurrent.TimeUnit
+import java.net.URL
 import xml.XML
 
-object S3 {
-  type S3Client = Service[S3Request, HttpResponse]
+object S3 {  
+  type S3Client = ServiceWrapper 
 
   @implicitNotFound(msg = "cannot find implicit S3Key in scope")
   case class S3Key(key: String)
@@ -32,18 +35,43 @@ object S3 {
   @implicitNotFound(msg = "cannot find implicit S3Secret in scope")
   case class S3Secret(secret: String)
 
-
   def get(key: String, secret: String) = new S3(key, secret)
 
-  def client(key: S3Key, secret: S3Secret, name: String = "S3Client", maxReq: StorageUnit = 100.megabytes, maxRes: StorageUnit = 100.megabytes): S3Client = {
-    ClientBuilder().codec(S3(key.key, secret.secret, Http(_maxRequestSize = maxReq, _maxResponseSize = maxRes)))
-      .sendBufferSize(262144)
-      .recvBufferSize(262144)
-      .hosts("s3.amazonaws.com:80")
-      .hostConnectionLimit(Integer.MAX_VALUE)
-      .name(name)
-      .build()
+  def client(key: S3Key, secret: S3Secret, name: String = "S3Client", maxReq: StorageUnit = 100.megabytes, maxRes: StorageUnit = 100.megabytes, 
+      host: String = "s3.amazonaws.com:80", connTimeout: Duration = Duration(1, TimeUnit.SECONDS)): S3Client = {
+    new ServiceWrapper(key, secret, name, maxReq, maxRes, host, connTimeout)
   }
+
+  class ServiceWrapper(key: S3Key, secret: S3Secret, name: String = "S3Client", maxReq: StorageUnit = 100.megabytes, maxRes: StorageUnit = 100.megabytes, 
+    host: String = "s3.amazonaws.com:80", connTimeout: Duration = Duration(1, TimeUnit.SECONDS)) {
+
+    def apply(request: S3Request): Future[HttpResponse] = {
+      submit(request, key, secret, host = host, connTimeout = connTimeout)
+    } 
+
+    def submit(request: S3Request, key: S3.S3Key, secret: S3.S3Secret, host: String, connTimeout: Duration): Future[HttpResponse] =  {
+      val s3 = client(key, secret, host = host, connTimeout = connTimeout)
+      s3(request) flatMap { resp =>
+        if (resp.getStatus() ==  HttpResponseStatus.TEMPORARY_REDIRECT) {
+          val url = new URL(resp.getHeader("Location"))
+          val newHost = "%s:%d".format(url.getHost.split("\\.").tail.mkString("."), url.getPort)
+          submit(request, key, secret, newHost, connTimeout)
+        } else Future.value(resp)
+      }
+    }
+
+    def client(key: S3Key, secret: S3Secret, name: String = "S3Client", maxReq: StorageUnit = 100.megabytes, maxRes: StorageUnit = 100.megabytes, 
+      host: String = "s3.amazonaws.com:80", connTimeout: Duration = Duration(1, TimeUnit.SECONDS)): Service[S3Request, HttpResponse] = {
+      ClientBuilder().codec(S3(key.key, secret.secret, Http(_maxRequestSize = maxReq, _maxResponseSize = maxRes)))
+        .sendBufferSize(262144)
+        .recvBufferSize(262144)
+        .hosts(host)
+        .hostConnectionLimit(Integer.MAX_VALUE)
+        .name(name)
+        .tcpConnectTimeout(connTimeout)
+        .build()
+    }
+  }  
 }
 
 case class S3(private val key: String, private val secret: String, httpFactory: CodecFactory[HttpRequest, HttpResponse] = Http.get()) extends CodecFactory[S3Request, HttpResponse] {
@@ -192,6 +220,29 @@ object ListAllBuckets {
         var resp: String = hResp.getContent.toString(UTF_8)
         var xResp = XML.loadString(resp)
         ((xResp \\ "Buckets" \\ "Bucket" \\ "Name") map (_.text)).toList
+    }
+  }
+}
+
+object RequestAndRetry {
+  def apply(request: S3Request, key: S3.S3Key, secret: S3.S3Secret, host: String = "s3.amazonaws.com:80"): Future[HttpResponse] =  {
+    submit(request, key, secret, host = host)
+  }
+
+  def submit(request: S3Request, key: S3.S3Key, secret: S3.S3Secret, host: String, retries: Int = 5, retryTimeout: Int = 5): Future[HttpResponse] =  {
+    val s3 = S3.client(key, secret, host = host)
+    s3(request) flatMap { resp =>
+      if (resp.getStatus() ==  HttpResponseStatus.TEMPORARY_REDIRECT) {
+        val url = new URL(resp.getHeader("Location"))
+        val newHost = "%s:%d".format(url.getHost.split("\\.").tail.mkString("."), url.getPort)
+        submit(request, key, secret, newHost, retries)
+      } else Future.value(resp)
+    } onFailure { resp =>
+      if(retries > 0) {
+        // Wait and retry in a few seconds ...
+        DefaultTimer.twitter.doLater(Duration.fromSeconds(retryTimeout)) {submit(request, key, secret, host, retries - 1)}
+      }
+      Future.exception(resp)
     }
   }
 }
@@ -393,6 +444,3 @@ object ListBucket {
 class S3Response(resp: HttpResponse) extends HttpResponseProxy {
   def httpResponse = resp
 }
-
-
-
