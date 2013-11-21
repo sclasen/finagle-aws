@@ -150,7 +150,7 @@ class RequestEncoder(key: String, secret: String) extends SimpleChannelDownstrea
       request.getMethod().getName,
       request.header(CONTENT_MD5).getOrElse(""),
       request.header(CONTENT_TYPE).getOrElse(""),
-      request.getHeader(DATE)
+      request.headers().get(DATE)
     ).foldLeft("")(_ + _ + "\n") + normalizeAmzHeaders(request) + "/" + request.bucket + request.getUri
     log.debug("String to sign")
     log.debug(data)
@@ -163,7 +163,7 @@ class RequestEncoder(key: String, secret: String) extends SimpleChannelDownstrea
       request.getMethod().getName,
       request.header(CONTENT_MD5).getOrElse(""),
       request.header(CONTENT_TYPE).getOrElse(""),
-      request.getHeader(DATE)
+      request.headers().get(DATE)
     ).foldLeft("")(_ + _ + "\n") + normalizeAmzHeaders(request) + request.getUri
     log.debug("String to sign")
     log.debug(data)
@@ -227,12 +227,12 @@ object ListAllBuckets {
 trait S3Request extends HttpRequestProxy {
 
   def setHeaders(headers: (String, String)*) = {
-    headers.foreach(h => httpRequest.setHeader(h._1, h._2))
+    headers.foreach(h => httpRequest.headers.set(h._1, h._2))
     this
   }
 
   def header(name: String): Option[String] = {
-    Option(httpRequest.getHeader(name))
+    Option(httpRequest.headers().get(name))
   }
 
 }
@@ -260,11 +260,11 @@ trait ObjectRequest extends BucketRequest {
   def objectName: String
 }
 
-case class Put(bucket: String, objectName: String, content: ChannelBuffer, headers: (String, String)*) extends ObjectRequest {
+case class Put(bucket: String, objectName: String, content: ChannelBuffer, newHeaders: (String, String)*) extends ObjectRequest {
   override val httpRequest: HttpRequest = new DefaultHttpRequest(HTTP_1_1, PUT, normalizeObjectName(objectName))
   setContent(content)
-  setHeader(CONTENT_LENGTH, content.readableBytes().toString)
-  headers.foreach(h => setHeader(h._1, h._2))
+  headers().add(CONTENT_LENGTH, content.readableBytes().toString)
+  newHeaders.foreach(h => headers().add(h._1, h._2))
 }
 
 case class Get(bucket: String, objectName: String, override val sign: Boolean = true) extends ObjectRequest {
@@ -277,7 +277,7 @@ case class Head(bucket: String, objectName: String, override val sign: Boolean =
 
 case class CreateBucket(bucket: String) extends BucketRequest {
   override val httpRequest: HttpRequest = new DefaultHttpRequest(HTTP_1_1, PUT, "/")
-  setHeader(CONTENT_LENGTH, "0")
+  headers().add(CONTENT_LENGTH, "0")
 }
 
 case class DeleteBucket(bucket: String) extends BucketRequest {
@@ -286,7 +286,7 @@ case class DeleteBucket(bucket: String) extends BucketRequest {
 
 case class Delete(bucket: String, objectName: String) extends ObjectRequest {
   override val httpRequest: HttpRequest = new DefaultHttpRequest(HTTP_1_1, DELETE, normalizeObjectName(objectName))
-  setHeader(CONTENT_LENGTH, "0")
+  headers().add(CONTENT_LENGTH, "0")
 }
 
 case class ListBucket(bucket: String, marker: Option[Marker] = None, prefix: Option[Prefix] = None) extends BucketRequest {
