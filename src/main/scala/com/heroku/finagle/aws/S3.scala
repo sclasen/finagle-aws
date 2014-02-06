@@ -54,7 +54,8 @@ object S3 {
       s3(request) flatMap { resp =>
         if (resp.getStatus() ==  HttpResponseStatus.TEMPORARY_REDIRECT) {
           val url = new URL(resp.getHeader("Location"))
-          val newHost = "%s:%d".format(url.getHost.split("\\.").tail.mkString("."), url.getPort)
+          val port = if (url.getPort == -1) 80 else url.getPort
+          val newHost = "%s:%d".format(url.getHost.split("\\.").tail.mkString("."), port)
           submit(request, key, secret, newHost, connTimeout)
         } else Future.value(resp)
       }
