@@ -45,23 +45,24 @@ object S3 {
   class ServiceWrapper(key: S3Key, secret: S3Secret, name: String = "S3Client", maxReq: StorageUnit = 100.megabytes, maxRes: StorageUnit = 100.megabytes, 
     host: String = "s3.amazonaws.com:80", connTimeout: Duration = Duration(1, TimeUnit.SECONDS)) {
 
+    val client = buildClient(key, secret, host = host, connTimeout = connTimeout)
+
     def apply(request: S3Request): Future[HttpResponse] = {
-      submit(request, key, secret, host = host, connTimeout = connTimeout)
+      submit(request, client)
     } 
 
-    def submit(request: S3Request, key: S3.S3Key, secret: S3.S3Secret, host: String, connTimeout: Duration): Future[HttpResponse] =  {
-      val s3 = client(key, secret, host = host, connTimeout = connTimeout)
-      s3(request) flatMap { resp =>
+    def submit(request: S3Request, client: Service[S3Request, HttpResponse]): Future[HttpResponse] =  {
+      client(request) flatMap { resp =>
         if (resp.getStatus() ==  HttpResponseStatus.TEMPORARY_REDIRECT) {
           val url = new URL(resp.getHeader("Location"))
           val port = if (url.getPort == -1) 80 else url.getPort
           val newHost = "%s:%d".format(url.getHost.split("\\.").tail.mkString("."), port)
-          submit(request, key, secret, newHost, connTimeout)
+          submit(request, buildClient(key, secret, host = newHost, connTimeout = connTimeout))
         } else Future.value(resp)
       }
     }
 
-    def client(key: S3Key, secret: S3Secret, name: String = "S3Client", maxReq: StorageUnit = 100.megabytes, maxRes: StorageUnit = 100.megabytes, 
+    def buildClient(key: S3Key, secret: S3Secret, name: String = "S3Client", maxReq: StorageUnit = 100.megabytes, maxRes: StorageUnit = 100.megabytes, 
       host: String = "s3.amazonaws.com:80", connTimeout: Duration = Duration(1, TimeUnit.SECONDS)): Service[S3Request, HttpResponse] = {
       ClientBuilder().codec(S3(key.key, secret.secret, Http(_maxRequestSize = maxReq, _maxResponseSize = maxRes)))
         .sendBufferSize(262144)
