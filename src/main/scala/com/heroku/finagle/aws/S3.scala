@@ -135,8 +135,9 @@ class RequestEncoder(key: String, secret: String) extends SimpleChannelDownstrea
   val ACL = "x-amz-acl"
   val STORAGE_CLASS = "x-amz-storage-class"
   val VERSION = "x-amz-version-id"
+  val SECURITY_TOKEN = "x-amz-security-token"
   //headers need to be in alphabetical order in this list
-  val AMZN_HEADERS = List(ACL, COPY_SOURCE, SOURCE_ETAG, SOURCE_MOD, STORAGE_CLASS, VERSION)
+  val AMZN_HEADERS = List(ACL, COPY_SOURCE, SOURCE_ETAG, SOURCE_MOD, STORAGE_CLASS, VERSION, SECURITY_TOKEN)
 
   val RRS = "REDUCED_REDUNDANCY"
   val ALGORITHM = "HmacSHA1"
